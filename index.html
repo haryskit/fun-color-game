@@ -8,7 +8,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Use the Inter font family -->
     <style>
-        @import url('https://fonts.fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f0f4f8; 
@@ -169,60 +169,10 @@
         <button id="restart-button" class="mt-6 w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-full shadow-lg transition duration-200 text-xl">
             Play Again
         </button>
-        <p id="user-id-display" class="mt-3 text-xs text-center text-gray-400">User ID: N/A</p>
     </div>
 </div>
 
-<script type="module">
-    // --- Firebase Imports ---
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-    // --- Firebase/Auth Setup ---
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
-    const firebaseConfig = JSON.parse(firebaseConfigStr);
-
-    let app;
-    let db;
-    let auth;
-    let userId = null;
-    let isAuthReady = false;
-
-    // Initialize Firebase
-    try {
-        app = initializeApp(firebaseConfig);
-        db = getFirestore(app);
-        auth = getAuth(app);
-    } catch (e) {
-        console.error("Firebase initialization failed:", e);
-        targetPromptEl.textContent = "Error: DB failed to load.";
-    }
-
-    // Handle Authentication
-    onAuthStateChanged(auth, async (user) => {
-        if (user) {
-            userId = user.uid;
-            document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
-            isAuthReady = true;
-            console.log("Authentication successful. User ID:", userId);
-            loadHighScore();
-            targetPromptEl.textContent = 'Click "Start Game!" to begin.';
-        } else {
-            // Sign in anonymously if no token is available or user is signed out
-            try {
-                if (typeof __initial_auth_token !== 'undefined') {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Authentication failed:", error);
-                targetPromptEl.textContent = "Error: Auth failed. Check console.";
-            }
-        }
-    });
+<script>
 
     // --- DOM Elements ---
     const canvas = document.getElementById('game-canvas');
@@ -281,21 +231,15 @@
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas(); // Initial call
 
-    // --- Firestore Functions ---
+    // --- LocalStorage Functions for High Score ---
 
-    function getUserDocRef() {
-        if (!isAuthReady || !userId) return null;
-        // Path: /artifacts/{appId}/users/{userId}/game_data/study_data
-        return doc(db, 'artifacts', appId, 'users', userId, 'game_data', 'study_data');
-    }
+    const HIGH_SCORE_KEY = 'funColorGameHighScore';
 
-    async function loadHighScore() {
-        const userDocRef = getUserDocRef();
-        if (!userDocRef) return;
+    function loadHighScore() {
         try {
-            const docSnap = await getDoc(userDocRef);
-            if (docSnap.exists()) {
-                highScore = docSnap.data().highScore || 0;
+            const saved = localStorage.getItem(HIGH_SCORE_KEY);
+            if (saved) {
+                highScore = parseInt(saved, 10) || 0;
                 highScoreBoardEl.textContent = `High Score: ${highScore}`;
             }
         } catch (e) {
@@ -303,13 +247,10 @@
         }
     }
 
-    async function saveHighScore(newScore) {
-        const userDocRef = getUserDocRef();
-        if (!userDocRef) return false;
+    function saveHighScore(newScore) {
         if (newScore > highScore) {
             try {
-                // Use setDoc with merge: true to update only the high score field
-                await setDoc(userDocRef, { highScore: newScore }, { merge: true });
+                localStorage.setItem(HIGH_SCORE_KEY, newScore.toString());
                 highScore = newScore;
                 highScoreBoardEl.textContent = `High Score: ${highScore}`;
                 return true;
@@ -319,29 +260,6 @@
             }
         }
         return false;
-    }
-
-    async function saveSession(logData) {
-        const userDocRef = getUserDocRef();
-        if (!userDocRef) return;
-
-        // Path: /artifacts/{appId}/users/{userId}/sessions/{timestamp}
-        const sessionDocRef = doc(db, 'artifacts', appId, 'users', userId, 'sessions', Date.now().toString());
-
-        try {
-            await setDoc(sessionDocRef, {
-                timestamp: Date.now(),
-                score: logData.score,
-                misses: logData.misses,
-                duration: logData.duration,
-                log: logData.log,
-                analysis: logData.analysis,
-                appId: appId
-            });
-            console.log("Session data saved to Firestore.");
-        } catch (e) {
-            console.error("Error saving session data:", e);
-        }
     }
 
 
@@ -902,7 +820,7 @@
 
 
     /** Ends the current game session */
-    async function endGame() {
+    function endGame() {
         isGameRunning = false;
         
         if (clickTimeout) clearTimeout(clickTimeout);
@@ -912,7 +830,7 @@
         analysisReportEl.innerHTML = reportHTML;
 
         // 2. Save High Score
-        const newHighScore = await saveHighScore(score);
+        const newHighScore = saveHighScore(score);
 
         // 3. Update Modal UI
         document.getElementById('modal-final-score').textContent = score;
@@ -924,39 +842,12 @@
             document.getElementById('new-high-score-message').classList.add('hidden');
         }
 
-        // 4. Save Session Log to Firestore
-        const sessionDuration = sessionLog.length > 0 ? (sessionLog[sessionLog.length - 1].time - sessionLog[0].time) : 0;
-        
-        // Collect a simplified analysis summary for the database
-        const analysisSummary = {
-            totalRounds, 
-            correctTaps: score, 
-            totalMisses, 
-            accuracy: (score / totalRounds) * 100,
-            avgRT: parseFloat(generateReport().avgReactionTime || 0),
-            stDevRT: parseFloat(generateReport().stDevReactionTime || 0),
-            maxLoad: Math.max(...sessionLog.map(l => l.shapeCount || currentShapeCount))
-        };
-        
-        await saveSession({
-            score: score,
-            misses: totalMisses,
-            duration: sessionDuration,
-            log: sessionLog, // Raw log for detailed analysis
-            analysis: analysisSummary // Summarized analysis for quick query
-        });
-
-        // 5. Show Modal
+        // 4. Show Modal
         modal.classList.remove('hidden');
     }
 
     /** Initialization function */
     function startGame() {
-        if (!isAuthReady) {
-            targetPromptEl.textContent = "Hold on, setting up connection...";
-            return;
-        }
-
         // Reset all session variables
         score = 0;
         misses = 0;
@@ -987,8 +878,9 @@
     canvas.addEventListener('mousedown', handleClick);
     canvas.addEventListener('touchstart', handleClick, { passive: false }); 
 
-    // Initial message before start
-    targetPromptEl.textContent = 'Waiting for secure session...';
+    // Initialize: Load high score and show ready message
+    loadHighScore();
+    targetPromptEl.textContent = 'Click "Start Game!" to begin.';
 </script>
 
 </body>
